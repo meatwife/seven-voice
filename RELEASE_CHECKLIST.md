@@ -23,15 +23,27 @@ Latest commits:
 
 ## Not yet verified
 
-- [ ] Clean-room Discord live test with an actual bot token and private test voice channel
-- [ ] Inbound voice receive with DAVE decrypt path on current Discord voice stack
-- [ ] Full loop: human voice -> transcript -> agent reply -> TTS playback
+- [x] Clean-room Discord live test with an actual bot token and private test voice channel
+- [x] Inbound voice receive with DAVE decrypt path on current Discord voice stack
+- [x] Full loop: human voice -> transcript -> agent reply -> TTS playback
 - [ ] GitHub remote configured under Sunny's GitHub
-- [ ] Final public status wording updated after live test
+- [x] Final public status wording updated after live test
 
 ## Live-test rule
 
 Do not run the public scaffold with the same Discord bot token while the private voice bot is still running. Stop/swap the private bot first to avoid duplicate-client conflicts.
+
+## Clean-room live test notes
+
+Verified on 2026-07-03 using a private test Discord environment:
+
+- `!join` connected to voice and played the join line.
+- `!test` played outbound TTS.
+- Human speech was received, decoded, transcribed, and posted back into the text channel.
+- An agent text reply was read aloud, verifying the full loop.
+- `!leave` disconnected cleanly.
+
+Observed but non-blocking: Discord/voice-recv emitted repeated RTCP sender report logs and a small number of packet-loss warnings during voice receive. Audio still decoded and transcribed successfully.
 
 ## Publishing rule
 

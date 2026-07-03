@@ -208,4 +208,4 @@ If TTS works but incoming voice produces `OpusError: corrupted stream`, read the
 
 ## Status
 
-Public scaffold in progress. Code is being sanitized and rewritten from the private prototype before release. Current code compiles, but needs clean-room testing before GitHub publication.
+Public scaffold tested in a private clean-room Discord environment. The full loop has been verified: voice join, outbound TTS, inbound speech transcription, agent reply playback, and clean leave. Next step is GitHub publication under Sunny's account.
