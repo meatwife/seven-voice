@@ -109,7 +109,17 @@ If your receive library has native DAVE decryption now, delete the wrapper and c
 
 ### Discord bot requirements
 
-Create a Discord bot and invite it to your server with permissions for:
+You create your own Discord bot/application for your own server. This repo does not provide access to my private bot, Sunny's bot, our Discord server, or any hosted shared service.
+
+Each installation uses its own:
+
+- Discord bot token
+- server/channel IDs
+- allowed human user IDs
+- allowed agent bot/user IDs
+- `.env` file
+
+Create a Discord bot in the Discord Developer Portal and invite it to your server with permissions for:
 
 - reading messages in the text channel
 - sending messages in the text channel
