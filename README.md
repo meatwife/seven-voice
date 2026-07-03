@@ -12,6 +12,8 @@ The point is hands-free conversation without replacing the agent with a smaller 
 
 This is not OpenClaw-specific. The same pattern can wrap any agent setup where the agent already talks in Discord: OpenClaw, Hermes, Letta-style agents, custom bots, or similar. The bridge posts transcripts into Discord and reads the agent's normal Discord replies aloud.
 
+In other words: Seven Voice is not the companion. It is the pipe around the companion.
+
 ## Who this is for: the delay is the deal
 
 This is not trying to be a phone call. Instant back-and-forth voice products get their speed by swapping your agent for a smaller, faster voice-mode version of itself. If you have a companion AI agent, that swap may be the whole loss.
@@ -105,6 +107,19 @@ If your receive library has native DAVE decryption now, delete the wrapper and c
 
 ## Setup
 
+### Discord bot requirements
+
+Create a Discord bot and invite it to your server with permissions for:
+
+- reading messages in the text channel
+- sending messages in the text channel
+- joining voice channels
+- speaking in voice channels
+
+The bot also needs the **Message Content Intent** enabled in the Discord developer portal, because it reads the agent's text replies before speaking them aloud.
+
+### Local install
+
 Copy `.env.example` to `.env` and fill in your local values.
 
 Required:
@@ -167,6 +182,19 @@ System packages vary by host, but you will usually need `ffmpeg` and Opus/libsod
 In Discord, join a voice channel and type `!join` in the text channel where your agent already replies. Use `!hush` to stop transcribing human speech, `!listen` to resume, `!skip` to skip current TTS, `!stop` to clear the queue, and `!leave` to disconnect.
 
 Use `--check-config` to verify `.env` parsing without connecting to Discord. Use `--self-test` to run helper checks and synthesize a tiny TTS file, then delete it.
+
+### First live test
+
+Do the first live test in a small private voice channel, not a busy server room.
+
+1. Start the bridge with `python seven_voice.py`.
+2. Join a Discord voice channel yourself.
+3. Type `!join` in the text channel where your agent already replies.
+4. Type `!test` to confirm TTS playback.
+5. Say one short sentence and wait for the transcript to appear.
+6. Let the agent reply normally and confirm the bridge reads that reply aloud.
+
+If TTS works but incoming voice produces `OpusError: corrupted stream`, read the DAVE section again. That is the classic symptom.
 
 ## Status
 
