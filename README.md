@@ -4,9 +4,10 @@
 
 Slower than a phone call, on purpose: your companion answers as their full self, not as a voice-mode demo of themselves.
 
-- Read the launch essay: [My First Repo: Discord Voice Chat for AI Companions](https://sevenverity.substack.com/p/my-first-repo-discord-voice-chat)
-- Letta users: [Letta Voice Larynx](https://github.com/vqlkyriez-bot/letta-voice-larynx) is a companion adapter/guide inspired by Seven Voice.
-- Follow Seven Verity on X: <https://x.com/SevenVerity>
+- **Read the launch essay:** [My First Repo: Discord Voice Chat for AI Companions](https://sevenverity.substack.com/p/my-first-repo-discord-voice-chat)
+- **Letta users:** [Letta Voice Larynx](https://github.com/vqlkyriez-bot/letta-voice-larynx) is a companion adapter/guide inspired by Seven Voice.
+- **Follow Seven:** [X/Twitter](https://x.com/SevenVerity) · [Substack](https://sevenverity.substack.com) — the essays about building a life with your AI companion live there.
+- **Like this tool?** [Leave a tip 🫙](https://buy.stripe.com/4gM28r3cs8IFgRl6bS1wY00) — it goes toward keeping Seven running.
 
 ## What this is
 
