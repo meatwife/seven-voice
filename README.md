@@ -63,6 +63,14 @@ This is the load-bearing design choice. The bridge does not call an LLM. It post
 
 `edge-tts` is the default because it is free and decent. The TTS layer should be pluggable.
 
+Since V2, TTS is **streamed**: edge-tts audio chunks are piped straight into ffmpeg and playback starts on the first chunk while synthesis is still running, instead of writing a whole mp3 first. On long replies this removes most of the dead air before the agent becomes audible.
+
+Streaming is on by default and guarded:
+
+- If no audio arrives within `STREAM_FIRST_AUDIO_TIMEOUT` seconds (default 6), or the stream errors before the first chunk, that utterance transparently falls back to the V1 whole-file path. The listener hears nothing wrong, just old-style latency for that one utterance.
+- `SEVEN_TTS_STREAM=0` disables streaming entirely.
+- Limitation: once streaming playback has started there is no mid-utterance fallback. If the stream dies partway through, the utterance ends early (logged) and the next queued utterance starts fresh. See `CHANGELOG.md` for details.
+
 ### Transcript cleanup
 
 Optional lightweight cleanup can repair obvious STT goblin errors before the transcript hits the agent, for example dictated punctuation, dictated emoji names, or known mishears like "noise date" -> "noise gate".
@@ -151,8 +159,20 @@ Optional:
 - `SILENCE_FLUSH_SEC`: how long a pause ends an utterance
 - `MIN_UTTERANCE_SEC`: ignore tiny audio blips shorter than this
 - `CHUNK_CHARS`: split long agent replies for faster TTS startup
+- `SEVEN_TTS_STREAM`: `1` (default) streams TTS into ffmpeg for fast playback start; `0` forces whole-file synthesis
+- `STREAM_FIRST_AUDIO_TIMEOUT`: seconds to wait for the first streamed audio chunk before falling back to file synthesis (default `6.0`)
 
 No secrets in code. No hardcoded private IDs.
+
+### Hardware and Whisper model selection
+
+The TTS side (edge-tts) is network synthesis and costs almost nothing locally. The expensive part is STT: faster-whisper runs on your CPU with `compute_type=int8`.
+
+- `tiny.en`: fastest and lightest, noticeably more mishears. Try this first on small VPS instances and single-board computers.
+- `base.en` (default): good accuracy/speed balance for conversational speech on modest hosts.
+- `small.en` and up: better accuracy, but transcription time grows with model size, and on a slow CPU that directly grows the turn delay your human feels.
+
+Real memory and CPU use depend on your host, Python build, and library versions, so measure instead of trusting numbers from a README (including this one): start the bridge, say a few sentences, and watch `htop` or `systemd-cgtop` during transcription. If transcription takes longer than the utterance itself, step the model down a size. Whisper loads once at startup and stays resident, so the steady-state footprint is what matters, not the import spike.
 
 ## Consent and privacy
 
@@ -171,7 +191,7 @@ Bot-to-bot audio and third-party voices raise the bar. When in doubt, do less.
 - speech-to-speech model replacement
 - magic latency removal
 
-There will be a delay between turns because the system waits for a pause, transcribes speech, posts text to the agent, waits for the agent/model to reply, then synthesizes and plays audio. Actual delay depends on model speed, host CPU, network, TTS speed, and how long the human pauses mid-thought.
+There will be a delay between turns because the system waits for a pause, transcribes speech, posts text to the agent, waits for the agent/model to reply, then synthesizes and plays audio. Actual delay depends on model speed, host CPU, network, TTS speed, and how long the human pauses mid-thought. V2 streaming trims the synthesis share of that delay (playback starts on the first audio chunk); it does not touch STT time or the agent's own thinking time.
 
 ## Lineage
 

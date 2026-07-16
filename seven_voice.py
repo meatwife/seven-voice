@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import logging
 import os
 import re
@@ -37,6 +38,15 @@ except ImportError:  # DAVE receive support is version/platform sensitive.
 
 OPUS_SILENCE = b"\xf8\xff\xfe"
 
+PIPE_CAPACITY = 1 << 20  # widen the tts pipe so producer writes never wedge
+
+
+def parse_bool(value: str, default: bool = True) -> bool:
+    value = value.strip().lower()
+    if not value:
+        return default
+    return value not in ("0", "false", "no", "off")
+
 
 @dataclass(frozen=True)
 class Config:
@@ -49,6 +59,8 @@ class Config:
     silence_flush_sec: float = 4.5
     min_utterance_sec: float = 0.6
     chunk_chars: int = 700
+    stream_tts: bool = True
+    stream_first_audio_timeout: float = 6.0
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -64,6 +76,8 @@ class Config:
             silence_flush_sec=float(os.getenv("SILENCE_FLUSH_SEC", "4.5")),
             min_utterance_sec=float(os.getenv("MIN_UTTERANCE_SEC", "0.6")),
             chunk_chars=int(os.getenv("CHUNK_CHARS", "700")),
+            stream_tts=parse_bool(os.getenv("SEVEN_TTS_STREAM", "")),
+            stream_first_audio_timeout=float(os.getenv("STREAM_FIRST_AUDIO_TIMEOUT", "6.0")),
         )
 
 
@@ -184,6 +198,130 @@ def split_text(text: str, limit: int) -> list[str]:
     return pieces
 
 
+# ---------------------------------------------------------------- streaming TTS
+#
+# discord.FFmpegOpusAudio(source, pipe=True) spawns a thread that
+# blocking-reads source.read(8192) and feeds ffmpeg's stdin, so the source
+# must be a real file object with proper EOF semantics — an os.pipe() read
+# end, not a BytesIO. edge-tts chunks go in the write end as they arrive;
+# playback starts on the first chunk while synthesis continues.
+
+tts_pipe_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-pipe")
+
+
+class _PipeWriteEnd:
+    """Write end of the tts pipe. write() and close() only ever run on
+    tts_pipe_executor (single thread), which serializes them — no fd can be
+    closed under an in-flight write or double-closed after fd-number reuse."""
+
+    def __init__(self, fd: int):
+        self.fd = fd
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        if self.closed:
+            return
+        view = memoryview(data)
+        while view:
+            try:
+                n = os.write(self.fd, view)
+            except OSError:  # reader gone (skip/stop killed ffmpeg) — drop the rest
+                return
+            view = view[n:]
+
+    def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+
+
+async def _stream_tts(text: str, voice: str, wend: _PipeWriteEnd,
+                      first_audio: asyncio.Future) -> None:
+    """Producer: pump edge-tts audio chunks into the pipe write end."""
+    loop = asyncio.get_running_loop()
+    t0 = time.time()
+    nbytes = 0
+    try:
+        async for chunk in edge_tts.Communicate(text, voice).stream():
+            if chunk["type"] != "audio":
+                continue
+            data = chunk["data"]
+            nbytes += len(data)
+            if not first_audio.done():
+                first_audio.set_result(time.time())
+            await loop.run_in_executor(tts_pipe_executor, wend.write, data)
+        logging.info("tts stream: synth finished in %.2fs (%d bytes, %d chars)",
+                     time.time() - t0, nbytes, len(text))
+    except Exception as e:
+        if not first_audio.done():
+            first_audio.set_exception(e)  # caller falls back to file synthesis
+        else:
+            # Playback is already running off this pipe; there is no clean way
+            # to splice in a fallback mid-utterance. Close the pipe so ffmpeg
+            # gets EOF and the chunk just ends early.
+            logging.warning("TTS stream died mid-playback, chunk cut short: %s", e)
+    finally:
+        tts_pipe_executor.submit(wend.close)
+
+
+async def start_stream(text: str, voice: str, first_audio_timeout: float, t_dequeue: float):
+    """Start edge-tts -> pipe -> ffmpeg. Returns once ffmpeg has a source
+    (first audio chunk arrived). Raises if no audio within
+    first_audio_timeout or the stream errors first — caller falls back to
+    file synthesis; nothing has been played yet."""
+    rfd, wfd = os.pipe()
+    try:
+        fcntl.fcntl(wfd, fcntl.F_SETPIPE_SZ, PIPE_CAPACITY)
+    except OSError:
+        pass  # default 64K pipe still works, writes just backpressure sooner
+    rfile = os.fdopen(rfd, "rb", buffering=0)  # raw: read() returns what's available
+    wend = _PipeWriteEnd(wfd)
+    first_audio = asyncio.get_running_loop().create_future()
+    writer = asyncio.ensure_future(_stream_tts(text, voice, wend, first_audio))
+    try:
+        t_first = await asyncio.wait_for(asyncio.shield(first_audio), first_audio_timeout)
+        logging.info("tts stream: first audio %.2fs after dequeue (%d chars)",
+                     t_first - t_dequeue, len(text))
+        source = discord.FFmpegOpusAudio(rfile, pipe=True)
+    except BaseException:
+        writer.cancel()
+        tts_pipe_executor.submit(wend.close)
+        try:
+            rfile.close()
+        except OSError:
+            pass
+        await asyncio.wait({writer}, timeout=5)
+        if first_audio.done() and not first_audio.cancelled():
+            first_audio.exception()  # consume so asyncio doesn't log it
+        else:
+            first_audio.cancel()
+        raise
+    return source, writer, wend, rfile
+
+
+async def finish_stream(source, writer, wend, rfile) -> None:
+    """Tear down a stream in an order that provably unwedges every party:
+    stop producing, EOF the pipe, let ffmpeg's feeder thread exit, close the
+    read end (breaks any pathological blocked write), reap the producer."""
+    writer.cancel()
+    tts_pipe_executor.submit(wend.close)
+    thread = getattr(source, "_pipe_writer_thread", None)  # noqa: SLF001, library internals
+    if thread is not None:
+        await asyncio.to_thread(thread.join, 3.0)
+        if thread.is_alive():
+            logging.warning("ffmpeg stdin feeder thread still alive after join timeout")
+    try:
+        rfile.close()
+    except OSError:
+        pass
+    done, pending = await asyncio.wait({writer}, timeout=5)
+    if pending:
+        logging.warning("tts stream producer task did not exit within 5s")
+
+
 class AudioBuffer:
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -273,31 +411,81 @@ class SevenVoice(discord.Client):
         await edge_tts.Communicate(text, self.config.tts_voice).save(path)
         return path
 
+    async def _play_and_wait(self, vc, source) -> None:
+        """Play a source until it ends or !skip/!stop fires."""
+        done = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        vc.play(source, after=lambda _: loop.call_soon_threadsafe(done.set))
+        skip_task = asyncio.create_task(self.skip.wait())
+        done_task = asyncio.create_task(done.wait())
+        await asyncio.wait({skip_task, done_task}, return_when=asyncio.FIRST_COMPLETED)
+        if self.skip.is_set() and vc.is_playing():
+            vc.stop()
+        skip_task.cancel()
+        done_task.cancel()
+
+    async def play_stream(self, vc, text: str, t_dequeue: float) -> None:
+        """Speak text by streaming edge-tts into ffmpeg through an OS pipe.
+        Raises only for failures before playback starts (caller then falls
+        back to file synthesis). Once playback has begun there is no
+        fallback: a mid-stream synth failure ends the utterance early
+        (logged), because the pipe carries no position info to resume from."""
+        source, writer, wend, rfile = await start_stream(
+            text, self.config.tts_voice, self.config.stream_first_audio_timeout, t_dequeue)
+        try:
+            t_play = time.time()
+            await self._play_and_wait(vc, source)
+            logging.info("tts stream: playback started %.2fs after dequeue, ran %.2fs",
+                         t_play - t_dequeue, time.time() - t_play)
+        except Exception:
+            logging.exception("stream playback failed")
+        finally:
+            await finish_stream(source, writer, wend, rfile)
+
+    async def play_file(self, vc, text: str, t_dequeue: float) -> None:
+        """Original path: synthesize a whole mp3, then play it."""
+        try:
+            t0 = time.time()
+            path = await self.synth(text)
+            logging.info("tts file: synth took %.2fs (%d chars)", time.time() - t0, len(text))
+        except Exception:
+            logging.exception("TTS synthesis failed")
+            return
+        try:
+            t_play = time.time()
+            await self._play_and_wait(vc, discord.FFmpegOpusAudio(path))
+            logging.info("tts file: playback started %.2fs after dequeue, ran %.2fs",
+                         t_play - t_dequeue, time.time() - t_play)
+        except Exception:
+            logging.exception("playback failed")
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
     async def speak_worker(self) -> None:
+        logging.info("speak worker up, streaming tts %s", "ON" if self.config.stream_tts else "OFF")
         while True:
             text = await self.queue.get()
-            if not self.voice or not self.voice.is_connected():
+            vc = self.voice
+            if not vc or not vc.is_connected():
                 continue
             self.skip.clear()
-            path = await self.synth(text)
-            try:
-                done = asyncio.Event()
-                self.voice.play(discord.FFmpegOpusAudio(path), after=lambda _: self.loop.call_soon_threadsafe(done.set))
-                skip_task = asyncio.create_task(self.skip.wait())
-                done_task = asyncio.create_task(done.wait())
-                await asyncio.wait({skip_task, done_task}, return_when=asyncio.FIRST_COMPLETED)
-                if self.skip.is_set() and self.voice.is_playing():
-                    self.voice.stop()
-                skip_task.cancel()
-                done_task.cancel()
-            finally:
+            t_dequeue = time.time()
+            if self.config.stream_tts:
                 try:
-                    os.unlink(path)
-                except OSError:
-                    pass
+                    await self.play_stream(vc, text, t_dequeue)
+                    continue
+                except Exception:
+                    logging.exception(
+                        "streaming TTS failed before playback, falling back to file synthesis")
+            await self.play_file(vc, text, t_dequeue)
 
     async def enqueue_agent_message(self, msg: discord.Message) -> None:
         text = clean_tts_text(msg)
+        if not text:
+            return
         for part in split_text(text, self.config.chunk_chars):
             await self.queue.put(part)
 
@@ -390,6 +578,8 @@ def main() -> None:
         print(f"text_channel_id={config.text_channel_id}")
         print(f"tts_voice={config.tts_voice}")
         print(f"whisper_model={config.whisper_model}")
+        print(f"stream_tts={config.stream_tts}")
+        print(f"stream_first_audio_timeout={config.stream_first_audio_timeout}")
         return
 
     if args.self_test:
