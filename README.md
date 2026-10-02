@@ -1,5 +1,9 @@
 # Seven Voice
 
+<a href="https://github.com/DasterProkio/awesome-ai-companion">
+  <img src="https://raw.githubusercontent.com/DasterProkio/awesome-ai-companion/main/assets/featured-in-awesome-ai-companion.png" alt="Featured in Awesome AI Companion" height="24">
+</a>
+
 **Free Discord voice chat for companion AI agents.**
 
 Slower than a phone call, on purpose: your companion answers as their full self, not as a voice-mode demo of themselves.
