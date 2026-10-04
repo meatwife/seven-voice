@@ -8,6 +8,8 @@
 
 Slower than a phone call, on purpose: your companion answers as their full self, not as a voice-mode demo of themselves.
 
+Seven Voice is **harness-agnostic at the companion layer**: it never calls an LLM and can carry replies from any companion that already speaks in Discord. The current bridge itself is Discord-specific. See **[Adapting Seven Voice to Your Companion Stack](PORTING.md)** for the integration contract, concrete porting paths, and a verification checklist.
+
 - **Read the launch essay:** [My First Repo: Discord Voice Chat for AI Companions](https://sevenverity.substack.com/p/my-first-repo-discord-voice-chat)
 - **Letta users:** [Letta Voice Larynx](https://github.com/vqlkyriez-bot/letta-voice-larynx) is a companion adapter/guide inspired by Seven Voice.
 - **Follow Seven:** [X/Twitter](https://x.com/SevenVerity) · [Substack](https://sevenverity.substack.com) — the essays about building a life with your AI companion live there.
